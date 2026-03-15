@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EBS // Outpost Disk Monitor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --black:#080a0e;--void:#0c0f15;--deep:#111520;--surface:#161b26;
+  --raised:#1c2333;--border:#232b3e;--muted:#2a3449;--dim:#3d4f6e;
+  --soft:#5a7090;--mid:#7a94b8;--bright:#a8bfd4;--light:#c8d8e8;--white:#e8f0f8;
+  --cyan:#00d4ff;--cyan-dim:#0099bb;
+  --green:#00e676;--green-dim:#00994d;
+  --amber:#ffab00;--amber-dim:#cc8800;
+  --red:#ff3d3d;--red-dim:#cc1111;
+  --wp:#7c83ff;--tv:#00e5b0;
+  --mono:'JetBrains Mono',monospace;--display:'Syne',sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:var(--mono);background:var(--black);color:var(--bright);min-height:100vh;overflow-x:hidden;}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.025) 2px,rgba(0,0,0,0.025) 4px);pointer-events:none;z-index:9999;}
+::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-thumb{background:var(--muted);}
+
+/* HEADER */
+.header{display:flex;align-items:center;justify-content:space-between;padding:0 22px;height:50px;background:var(--void);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;gap:8px;flex-wrap:wrap;}
+.brand{display:flex;align-items:center;gap:12px;}
+.brand-bars{display:flex;align-items:flex-end;gap:2px;height:20px;}
+.brand-bars span{display:block;width:3px;border-radius:1px;background:var(--cyan);}
+.brand-bars span:nth-child(1){height:12px;} .brand-bars span:nth-child(2){height:20px;} .brand-bars span:nth-child(3){height:16px;} .brand-bars span:nth-child(4){height:8px;opacity:.5;}
+.brand-name{font-family:var(--display);font-size:13px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--white);}
+.brand-name em{color:var(--cyan);font-style:normal;}
+.hdr-chips{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:500;letter-spacing:.07em;text-transform:uppercase;padding:3px 9px;border-radius:2px;border:1px solid;}
+.chip.live{border-color:var(--green-dim);color:var(--green);background:rgba(0,230,118,.06);}
+.chip.adm{border-color:var(--wp);color:var(--wp);background:rgba(124,131,255,.07);}
+.chip.ro{border-color:var(--dim);color:var(--mid);}
+.chip.data{border-color:var(--cyan-dim);color:var(--cyan);background:rgba(0,212,255,.06);}
+.pulse{width:5px;height:5px;border-radius:50%;background:currentColor;animation:blink 2s ease-in-out infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.hdr-right{display:flex;align-items:center;gap:8px;}
+.ts{font-size:10px;color:var(--dim);}
+.hbtn{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;padding:5px 11px;border-radius:2px;border:1px solid var(--border);background:transparent;color:var(--soft);cursor:pointer;transition:all .12s;}
+.hbtn:hover{border-color:var(--cyan-dim);color:var(--cyan);background:rgba(0,212,255,.05);}
+.hbtn.out:hover{border-color:var(--red-dim);color:var(--red);}
+.hbtn:disabled{opacity:.3;cursor:not-allowed;}
+
+/* FILTER BAR */
+.fbar{display:flex;align-items:center;gap:10px;padding:7px 22px;background:var(--void);border-bottom:1px solid var(--border);position:sticky;top:50px;z-index:90;flex-wrap:wrap;}
+.flbl{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);white-space:nowrap;}
+.fsel,.fdate{font-family:var(--mono);font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:4px 7px;color:var(--bright);outline:none;cursor:pointer;transition:border-color .12s;}
+.fsel:focus,.fdate:focus{border-color:var(--cyan-dim);}
+.fsel option{background:var(--deep);}
+.fdate{color-scheme:dark;}
+.fdiv{width:1px;height:16px;background:var(--border);}
+.fapply{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;padding:4px 11px;border-radius:2px;border:1px solid var(--cyan-dim);background:rgba(0,212,255,.07);color:var(--cyan);cursor:pointer;}
+.fapply:hover{background:rgba(0,212,255,.14);}
+.rtag{font-size:10px;padding:3px 9px;border-radius:2px;border:1px solid var(--muted);color:var(--mid);white-space:nowrap;}
+
+/* LAYOUT */
+.shell{display:flex;min-height:calc(100vh - 98px);}
+
+/* SIDEBAR */
+.sidebar{width:232px;min-width:232px;background:var(--void);border-right:1px solid var(--border);overflow-y:auto;display:flex;flex-direction:column;}
+.sbhdr{padding:11px 13px 8px;border-bottom:1px solid var(--border);}
+.sbtitle{font-family:var(--display);font-size:8px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin-bottom:7px;}
+.sbsearch{width:100%;font-family:var(--mono);font-size:11px;background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:5px 9px;color:var(--bright);outline:none;}
+.sbsearch:focus{border-color:var(--cyan-dim);}
+.sbsearch::placeholder{color:var(--dim);}
+.oplbl{display:flex;align-items:center;gap:5px;padding:9px 13px 3px;font-size:9px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);}
+.oppip{width:5px;height:5px;border-radius:50%;}
+.srow{display:flex;align-items:center;justify-content:space-between;padding:6px 13px;cursor:pointer;border-left:2px solid transparent;transition:all .1s;gap:6px;}
+.srow:hover{background:var(--surface);border-left-color:var(--dim);}
+.srow.active{background:rgba(0,212,255,.05);border-left-color:var(--cyan);}
+.sname{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--bright);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sind{width:4px;height:4px;border-radius:50%;flex-shrink:0;}
+.sind.ok{background:var(--green);} .sind.warn{background:var(--amber);} .sind.crit{background:var(--red);box-shadow:0 0 5px var(--red);}
+.sstats{display:flex;flex-direction:column;align-items:flex-end;gap:1px;flex-shrink:0;}
+.spct{font-size:11px;font-weight:600;}
+.sdrvs{font-size:9px;color:var(--dim);}
+
+/* CONTENT */
+.content{flex:1;overflow-y:auto;padding:18px 22px;}
+
+/* ALERTS */
+.abanner{display:none;align-items:center;gap:9px;padding:9px 13px;margin-bottom:14px;border-radius:2px;border:1px solid var(--red-dim);background:rgba(255,61,61,.06);font-size:11px;color:var(--red);}
+.abanner.show{display:flex;}
+.apulse{width:5px;height:5px;border-radius:50%;background:var(--red);flex-shrink:0;animation:blink 1s ease-in-out infinite;}
+.ibanner{display:none;padding:9px 13px;margin-bottom:14px;border-radius:2px;border:1px solid var(--cyan-dim);background:rgba(0,212,255,.05);font-size:11px;color:var(--cyan);}
+.ibanner.show{display:block;}
+
+/* METRIC CARDS */
+.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:7px;margin-bottom:18px;}
+.mcard{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:11px 13px;position:relative;overflow:hidden;transition:border-color .12s;}
+.mcard::after{content:'';position:absolute;top:0;left:0;right:0;height:1px;}
+.mcard.cc::after{background:var(--cyan);} .mcard.cg::after{background:var(--green);}
+.mcard.ca::after{background:var(--amber);} .mcard.cr::after{background:var(--red);}
+.mcard.cw::after{background:var(--wp);} .mcard.ct::after{background:var(--tv);}
+.mcard:hover{border-color:var(--muted);}
+.mlbl{font-size:9px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:5px;}
+.mval{font-family:var(--display);font-size:21px;font-weight:800;color:var(--white);line-height:1;letter-spacing:-.02em;}
+.msub{font-size:10px;color:var(--soft);margin-top:2px;}
+
+/* TABS */
+.stabs{display:flex;gap:1px;margin-bottom:12px;border-bottom:1px solid var(--border);}
+.stab{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:7px 13px;border-radius:2px 2px 0 0;border:1px solid transparent;border-bottom:none;background:transparent;color:var(--dim);cursor:pointer;position:relative;bottom:-1px;transition:all .1s;}
+.stab:hover{color:var(--bright);}
+.stab.active{background:var(--surface);border-color:var(--border);border-bottom-color:var(--surface);color:var(--cyan);}
+
+/* CTRL BAR */
+.cbar{display:flex;align-items:center;gap:7px;margin-bottom:10px;flex-wrap:wrap;}
+.csel{font-family:var(--mono);font-size:10px;letter-spacing:.04em;background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:4px 7px;color:var(--bright);outline:none;cursor:pointer;}
+.csel option{background:var(--deep);}
+
+/* TABLE */
+.twrap{overflow-x:auto;}
+.dtbl{width:100%;border-collapse:collapse;font-size:11px;min-width:840px;}
+.dtbl thead tr{border-bottom:1px solid var(--border);}
+.dtbl th{text-align:left;font-size:9px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);padding:6px 9px;white-space:nowrap;}
+.dtbl td{padding:8px 9px;border-bottom:1px solid rgba(35,43,62,.5);vertical-align:middle;}
+.dtbl tbody tr{transition:background .08s;}
+.dtbl tbody tr:hover td{background:var(--surface);}
+.dtbl tbody tr:last-child td{border-bottom:none;}
+.slink{color:var(--cyan);cursor:pointer;font-weight:500;}
+.slink:hover{color:var(--white);}
+.badge{display:inline-block;font-size:9px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;padding:2px 6px;border-radius:2px;border:1px solid;}
+.badge.ok{border-color:var(--green-dim);color:var(--green);background:rgba(0,230,118,.07);}
+.badge.warn{border-color:var(--amber-dim);color:var(--amber);background:rgba(255,171,0,.07);}
+.badge.crit{border-color:var(--red-dim);color:var(--red);background:rgba(255,61,61,.07);}
+.badge.wp{border-color:rgba(124,131,255,.4);color:var(--wp);background:rgba(124,131,255,.07);}
+.badge.tv{border-color:rgba(0,229,176,.4);color:var(--tv);background:rgba(0,229,176,.07);}
+.badge.dsz{border-color:var(--amber-dim);color:var(--amber);background:rgba(255,171,0,.05);}
+.ubar{width:78px;height:3px;background:var(--muted);border-radius:1px;overflow:hidden;}
+.ufill{height:100%;border-radius:1px;}
+.dbtn{font-family:var(--mono);font-size:9px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:2px;border:1px solid var(--border);background:transparent;color:var(--dim);cursor:pointer;transition:all .1s;}
+.dbtn:hover{border-color:var(--cyan-dim);color:var(--cyan);background:rgba(0,212,255,.04);}
+
+/* DAYS GRID */
+.dgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;margin-bottom:14px;}
+.dcard{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:11px 12px;cursor:pointer;transition:all .1s;}
+.dcard:hover{border-color:var(--muted);background:var(--raised);}
+.dcard.dc{border-color:var(--red-dim);} .dcard.dw{border-color:var(--amber-dim);}
+.dcsrv{font-size:10px;color:var(--soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dcdrv{font-size:9px;color:var(--dim);margin-bottom:5px;}
+.dcnum{font-family:var(--display);font-size:26px;font-weight:800;line-height:1;letter-spacing:-.02em;}
+.dcnum.red{color:var(--red);} .dcnum.amber{color:var(--amber);} .dcnum.green{color:var(--green);}
+.dcunit{font-size:9px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase;margin-top:2px;}
+.dcgr{font-size:10px;color:var(--soft);margin-top:3px;}
+
+/* DOWNSIZE CARDS */
+.dszcard{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--amber);border-radius:3px;padding:14px 16px;margin-bottom:9px;}
+.dszhdr{display:flex;align-items:center;gap:9px;margin-bottom:10px;flex-wrap:wrap;}
+.dszname{font-family:var(--display);font-size:14px;font-weight:700;color:var(--white);}
+.dszgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:5px;margin-bottom:9px;}
+.dszitem{background:var(--raised);border:1px solid var(--border);border-radius:2px;padding:7px 9px;}
+.dszilbl{font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:2px;}
+.dszival{font-size:12px;font-weight:500;color:var(--bright);}
+.dszrec{padding:9px 11px;background:rgba(255,171,0,.05);border:1px solid rgba(255,171,0,.18);border-radius:2px;font-size:11px;color:var(--amber);line-height:1.6;}
+.dszrec strong{color:var(--white);}
+.dszrec a{color:var(--cyan);cursor:pointer;text-decoration:underline;}
+
+/* SERVER DETAIL */
+#server-view{display:none;}
+.svnav{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;}
+.svbc{font-size:11px;color:var(--soft);margin-bottom:3px;}
+.svbc a{color:var(--cyan);cursor:pointer;}
+.svbc span{color:var(--dim);}
+.svname{font-family:var(--display);font-size:19px;font-weight:800;color:var(--white);letter-spacing:-.01em;}
+.svacts{display:flex;gap:6px;}
+.svmeta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:12px;}
+.mtag{font-size:10px;padding:2px 7px;border-radius:2px;border:1px solid var(--border);color:var(--soft);}
+.dtabs{display:flex;gap:3px;margin-bottom:12px;flex-wrap:wrap;}
+.dtab{font-family:var(--mono);font-size:11px;font-weight:500;padding:5px 13px;border-radius:2px;border:1px solid var(--border);background:var(--surface);color:var(--soft);cursor:pointer;transition:all .1s;display:flex;align-items:center;gap:7px;}
+.dtab:hover{border-color:var(--muted);color:var(--bright);}
+.dtab.active{border-color:var(--cyan-dim);background:rgba(0,212,255,.06);color:var(--cyan);}
+.dtab-pct{font-weight:700;}
+.dtab-hint{font-size:8px;color:var(--amber);}
+.recbox{border-radius:2px;padding:11px 14px;margin-bottom:12px;border:1px solid;border-left:3px solid;font-size:11px;line-height:1.7;}
+.recbox.rd{border-color:var(--amber-dim);background:rgba(255,171,0,.04);color:var(--amber);}
+.recbox.rc{border-color:var(--red-dim);background:rgba(255,61,61,.04);color:var(--red);}
+.recbox.rw{border-color:var(--amber-dim);background:rgba(255,171,0,.04);color:var(--amber);}
+.recbox.ro{border-color:var(--green-dim);background:rgba(0,230,118,.04);color:var(--green);}
+.rectitle{font-weight:600;margin-bottom:3px;font-size:11px;letter-spacing:.04em;}
+.recbody strong{color:var(--white);}
+.svmetrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:7px;margin-bottom:14px;}
+.cpanel{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:14px 16px;margin-bottom:12px;}
+.ctitle{font-family:var(--display);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--bright);margin-bottom:3px;}
+.csub{font-size:10px;color:var(--dim);margin-bottom:10px;}
+.cleg{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:9px;}
+.cleg span{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--soft);}
+.cleg-line{width:11px;height:2px;border-radius:1px;}
+.rsel{font-family:var(--mono);font-size:10px;background:var(--raised);border:1px solid var(--border);border-radius:2px;padding:3px 7px;color:var(--bright);outline:none;cursor:pointer;}
+.shdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.slbl{font-family:var(--display);font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);}
+.htbl{width:100%;border-collapse:collapse;font-size:11px;min-width:520px;}
+.htbl th{font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding:5px 9px;text-align:left;border-bottom:1px solid var(--border);}
+.htbl td{padding:6px 9px;border-bottom:1px solid rgba(35,43,62,.5);font-family:var(--mono);}
+.htbl tbody tr:hover td{background:var(--raised);}
+.htbl tr:last-child td{border-bottom:none;}
+.cu{color:var(--red);} .cd{color:var(--green);} .cf{color:var(--dim);}
+
+/* PANEL */
+.panel{display:none;} .panel.active{display:block;}
+
+/* LOADING */
+.loading{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px;gap:14px;}
+.loader{width:28px;height:28px;border:1px solid var(--border);border-top-color:var(--cyan);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loader-txt{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);}
+
+@media(max-width:840px){.shell{flex-direction:column;}.sidebar{width:100%;min-width:unset;border-right:none;border-bottom:1px solid var(--border);max-height:200px;}}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="brand">
+    <div class="brand-bars"><span></span><span></span><span></span><span></span></div>
+    <div class="brand-name">EBS <em>//</em> Outpost Monitor</div>
+  </div>
+  <div class="hdr-chips">
+    <div class="chip live"><span class="pulse"></span>Live</div>
+    <div class="chip" id="role-chip"></div>
+    <div class="chip data" id="data-chip"></div>
+  </div>
+  <div class="hdr-right">
+    <span class="ts" id="ts-lbl"></span>
+    <button class="hbtn" id="refresh-btn" onclick="triggerRefresh()" style="display:none">&#8635; Refresh</button>
+    <button class="hbtn out" onclick="signOut()">Sign out</button>
+  </div>
+</header>
+
+<div class="fbar">
+  <span class="flbl">Range</span>
+  <select class="fsel" id="range-preset" onchange="applyPreset()">
+    <option value="all">All available</option>
+    <option value="7">Last 7d</option>
+    <option value="14">Last 14d</option>
+    <option value="30">Last 30d</option>
+    <option value="60">Last 60d</option>
+    <option value="90">Last 90d</option>
+    <option value="180">Last 180d</option>
+    <option value="custom">Custom</option>
+  </select>
+  <div id="custom-range" style="display:none;align-items:center;gap:5px;">
+    <input type="date" class="fdate" id="date-from"/>
+    <span style="color:var(--dim);font-size:11px;">&#8212;</span>
+    <input type="date" class="fdate" id="date-to"/>
+    <button class="fapply" onclick="applyFilter()">Apply</button>
+  </div>
+  <div class="fdiv"></div>
+  <span class="flbl">Outpost</span>
+  <select class="fsel" id="op-filter" onchange="applyFilter()">
+    <option value="all">All</option>
+    <option value="wp-outpost">wp-outpost</option>
+    <option value="tv-outpost">tv-outpost</option>
+  </select>
+  <span class="flbl">Status</span>
+  <select class="fsel" id="status-filter" onchange="applyFilter()">
+    <option value="all">All</option>
+    <option value="crit">Critical</option>
+    <option value="warn">Warning</option>
+    <option value="ok">Healthy</option>
+  </select>
+  <div class="fdiv"></div>
+  <span class="rtag" id="range-tag">—</span>
+</div>
+
+<div class="shell">
+  <nav class="sidebar">
+    <div class="sbhdr">
+      <div class="sbtitle">Servers</div>
+      <input class="sbsearch" id="srv-search" placeholder="filter..." oninput="renderSidebar()"/>
+    </div>
+    <div id="sb-list"></div>
+  </nav>
+
+  <div class="content">
+    <div class="loading" id="loading">
+      <div class="loader"></div>
+      <div class="loader-txt">Fetching metrics&hellip;</div>
+    </div>
+
+    <!-- FLEET VIEW -->
+    <div id="fleet-view" style="display:none">
+      <div class="abanner" id="abanner"><div class="apulse"></div><span id="atext"></span></div>
+      <div class="ibanner" id="ibanner"></div>
+      <div class="mgrid" id="fleet-metrics"></div>
+      <div class="stabs">
+        <button class="stab active" id="tab-inv"  onclick="showPanel('inv')">Inventory</button>
+        <button class="stab"        id="tab-dsz"  onclick="showPanel('dsz')">Downsize candidates</button>
+        <button class="stab"        id="tab-days" onclick="showPanel('days')">Days until full</button>
+      </div>
+
+      <div class="panel active" id="panel-inv">
+        <div class="cbar">
+          <select class="csel" id="srt-col" onchange="renderTable()">
+            <option value="pct">% used &#8595;</option>
+            <option value="growth">Growth &#8595;</option>
+            <option value="days">Days left &#8593;</option>
+            <option value="free">Free GB &#8593;</option>
+            <option value="name">Name A&#8211;Z</option>
+          </select>
+        </div>
+        <div class="twrap">
+          <table class="dtbl">
+            <thead><tr>
+              <th>Server</th><th>Outpost</th><th>Drive</th><th>Volume ID</th>
+              <th>Provisioned</th><th>Used</th><th>Free</th><th>%</th>
+              <th>Usage</th><th>Growth</th><th>Days</th><th>Pts</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody id="fleet-tbody"><tr><td colspan="14" style="text-align:center;color:var(--dim);padding:32px;font-size:11px;letter-spacing:.06em">LOADING DATA&hellip;</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-dsz"><div id="dsz-list"></div></div>
+      <div class="panel" id="panel-days"><div class="dgrid" id="days-grid"></div></div>
+    </div>
+
+    <!-- SERVER DETAIL -->
+    <div id="server-view">
+      <div class="svnav">
+        <div>
+          <div class="svbc"><a onclick="showFleet()">&#8592; fleet</a> <span>/</span> <span id="sv-op"></span></div>
+          <div class="svname" id="sv-name"></div>
+        </div>
+        <div class="svacts">
+          <button class="hbtn" onclick="exportCSV()">&#8659; CSV</button>
+          <button class="hbtn" onclick="showFleet()">&#8592; Back</button>
+        </div>
+      </div>
+      <div class="svmeta" id="sv-meta"></div>
+      <div class="dtabs" id="drive-tabs"></div>
+      <div class="recbox" id="recbox" style="display:none">
+        <div class="rectitle" id="rectitle"></div>
+        <div class="recbody"  id="recbody"></div>
+      </div>
+      <div class="svmetrics" id="sv-metrics"></div>
+
+      <div class="cpanel">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:3px;gap:8px;flex-wrap:wrap;">
+          <span class="ctitle">Storage trend</span>
+          <select class="rsel" id="sv-range" onchange="renderServerCharts()">
+            <option value="all">All</option><option value="7">7d</option><option value="14">14d</option>
+            <option value="30">30d</option><option value="60">60d</option>
+            <option value="90">90d</option><option value="180" selected>180d</option>
+          </select>
+        </div>
+        <div class="csub" id="svdrvlbl"></div>
+        <div class="cleg">
+          <span><span class="cleg-line" style="background:var(--cyan)"></span>Used GB</span>
+          <span><span class="cleg-line" style="background:var(--green)"></span>Free GB</span>
+          <span><span class="cleg-line" style="background:var(--dim);opacity:.5;border-top:1px dashed;height:0"></span>Provisioned</span>
+        </div>
+        <div style="position:relative;height:200px"><canvas id="sv-trend"></canvas></div>
+      </div>
+
+      <div class="cpanel">
+        <div class="ctitle" style="margin-bottom:3px">Daily delta</div>
+        <div class="csub">GB/day — red = growing &nbsp;&#183;&nbsp; green = shrinking &nbsp;&#183;&nbsp; grey = flat</div>
+        <div style="position:relative;height:110px"><canvas id="sv-delta"></canvas></div>
+      </div>
+
+      <div class="cpanel">
+        <div class="shdr" style="margin-bottom:10px">
+          <span class="slbl">Monthly summary</span>
+        </div>
+        <div class="twrap"><table class="htbl"><thead><tr>
+          <th>Month</th><th>Start</th><th>End</th><th>Growth</th><th>Avg/day</th><th>% Used</th><th>Assessment</th>
+        </tr></thead><tbody id="monthly-tbody"></tbody></table></div>
+      </div>
+
+      <div class="cpanel">
+        <div class="shdr" style="margin-bottom:10px">
+          <span class="slbl">Daily history</span>
+          <select class="rsel" id="hist-range" onchange="renderHistoryTable()">
+            <option value="all">All</option><option value="14">14d</option>
+            <option value="30">30d</option><option value="60">60d</option><option value="90">90d</option>
+          </select>
+        </div>
+        <div class="twrap"><table class="htbl"><thead><tr>
+          <th>Date</th><th>Used</th><th>Free</th><th>%</th><th>&#916;</th><th>7d avg</th><th>Provisioned</th>
+        </tr></thead><tbody id="hist-tbody"></tbody></table></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CONFIG={API_BASE:'',COGNITO_REGION:'ALB_HANDLES_AUTH',USER_POOL_ID:'ALB_HANDLES_AUTH',CLIENT_ID:'ALB_HANDLES_AUTH'};
+let summary=null,allDrives=[],filtDrives=[],filterFrom=null,filterTo=null;
+let activeServer=null,activeDrive=null,isAdmin=false,svTrend,svDelta;
+
+document.addEventListener('DOMContentLoaded',loadData);
+function signOut(){window.location.href='/logout';}
+
+async function apiGet(p){const r=await fetch(CONFIG.API_BASE+p,{credentials:'same-origin'});if(!r.ok)throw new Error(r.status+': '+await r.text());return r.json();}
+async function apiPost(p){const r=await fetch(CONFIG.API_BASE+p,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'}});if(!r.ok)throw new Error(r.status+': '+await r.text());return r.json();}
+
+async function loadData(){
+  document.getElementById('loading').style.display='flex';
+  document.getElementById('fleet-view').style.display='none';
+  document.getElementById('server-view').style.display='none';
+  try{
+    summary=await apiGet('/api/summary');
+    allDrives=summary.drives||[];
+    const user=summary._user||{};
+    isAdmin=user.is_admin||false;
+    document.getElementById('role-chip').textContent=isAdmin?'Admin':'Read-only';
+    document.getElementById('role-chip').className='chip '+(isAdmin?'adm':'ro');
+    if(isAdmin)document.getElementById('refresh-btn').style.display='inline-block';
+    document.getElementById('data-chip').textContent=(summary.days_of_data||0)+'d data';
+    document.getElementById('ts-lbl').textContent='Updated '+new Date(summary.generated_utc).toLocaleTimeString();
+    if(summary.data_from)document.getElementById('date-from').value=summary.data_from;
+    if(summary.data_to)document.getElementById('date-to').value=summary.data_to;
+    document.getElementById('loading').style.display='none';
+    applyFilter();
+  }catch(e){
+    document.getElementById('loading').innerHTML=
+      '<div style="color:var(--red);font-size:12px;letter-spacing:.04em">Error: '+e.message+'</div>'+
+      '<button class="hbtn" style="margin-top:12px" onclick="loadData()">Retry</button>';
+  }
+}
+
+async function triggerRefresh(){
+  if(!isAdmin)return;
+  const b=document.getElementById('refresh-btn');
+  b.disabled=true;b.textContent='Starting…';
+  try{const r=await apiPost('/api/refresh');showInfo(r.message||'Aggregator started');setTimeout(loadData,120000);}
+  catch(e){showAlert('Refresh failed: '+e.message);}
+  b.disabled=false;b.textContent='↻ Refresh';
+}
+
+function applyPreset(){
+  const v=document.getElementById('range-preset').value;
+  document.getElementById('custom-range').style.display=v==='custom'?'flex':'none';
+  if(v==='custom')return;
+  if(v==='all'){filterFrom=null;filterTo=null;}
+  else{const n=parseInt(v);filterTo=new Date();filterFrom=new Date();filterFrom.setDate(filterFrom.getDate()-n);}
+  applyFilter();
+}
+
+function applyFilter(){
+  const pv=document.getElementById('range-preset').value;
+  if(pv==='custom'){
+    const f=document.getElementById('date-from').value,t=document.getElementById('date-to').value;
+    filterFrom=f?new Date(f+'T00:00:00'):null;filterTo=t?new Date(t+'T23:59:59'):null;
+  }
+  const opf=document.getElementById('op-filter').value,stf=document.getElementById('status-filter').value;
+  filtDrives=allDrives.filter(d=>opf==='all'||d.outpost===opf).filter(d=>stf==='all'||d.status===stf).map(d=>{
+    if(!filterFrom&&!filterTo)return d;
+    const fh=(d.history||[]).filter(h=>{const dt=new Date(h.date+'T00:00:00');if(filterFrom&&dt<filterFrom)return false;if(filterTo&&dt>filterTo)return false;return true;});
+    if(!fh.length)return{...d,_h:true};
+    const lat=fh[fh.length-1],wgr=gr(fh,Math.min(7,fh.length));
+    return{...d,used_gb:lat.used_gb,free_gb:lat.free_gb,pct:lat.pct,daily_growth:wgr,days_left:wgr>.05?Math.floor(lat.free_gb/wgr):9999,status:lat.pct>=90?'crit':lat.pct>=75?'warn':'ok',_fh:fh};
+  }).filter(d=>!d._h);
+  const from=filterFrom?_fmt(filterFrom.toISOString().slice(0,10)):_fmt(summary?.data_from||'');
+  const to=filterTo?_fmt(filterTo.toISOString().slice(0,10)):_fmt(summary?.data_to||'');
+  document.getElementById('range-tag').textContent=from+' → '+to;
+  renderAll();
+}
+
+const gh=d=>d._fh||d.history||[];
+function gr(s,w){if(s.length<2)return 0;const sl=s.slice(-Math.min(w+1,s.length));return sl.length<2?0:Math.round(((sl[sl.length-1].used_gb-sl[0].used_gb)/Math.max(1,sl.length-1))*10)/10;}
+function bc(p){return p>=90?'var(--red)':p>=75?'var(--amber)':'var(--green)';}
+function sc(p){return p>=90?'crit':p>=75?'warn':'ok';}
+function sl(p){return p>=90?'Critical':p>=75?'Warning':'Healthy';}
+function dc(d){return d<30?'var(--red)':d<60?'var(--amber)':'var(--green)';}
+function dn(d){return d<30?'red':d<60?'amber':'green';}
+function _fmt(s){if(!s||s==='—')return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}
+function _fsh(s){if(!s)return'—';return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});}
+function _fmo(s){return new Date(s+'T00:00:00').toLocaleDateString('en-US',{month:'short',year:'2-digit'});}
+function showAlert(m){document.getElementById('atext').textContent=m;document.getElementById('abanner').classList.add('show');}
+function showInfo(m){const b=document.getElementById('ibanner');b.textContent=m;b.classList.add('show');setTimeout(()=>b.classList.remove('show'),8000);}
+
+function renderAll(){renderAlerts();renderSidebar();renderFleetMetrics();renderTable();renderDsz();renderDaysGrid();if(activeServer)renderServerDrive();else showFleet();}
+
+function renderAlerts(){const c=filtDrives.filter(d=>d.status==='crit');if(c.length)showAlert('CRITICAL: '+c.length+' drive(s) above 90% — '+c.map(d=>d.server+' '+d.drive+' ('+d.pct+'%)').join('  ·  '));}
+
+function renderSidebar(){
+  const q=document.getElementById('srv-search').value.toLowerCase();
+  const ops=['wp-outpost','tv-outpost'],oc={'wp-outpost':'var(--wp)','tv-outpost':'var(--tv)'};
+  let h='';
+  ops.forEach(op=>{
+    const s=[...new Set(filtDrives.filter(d=>d.outpost===op&&(!q||d.server.toLowerCase().includes(q))).map(d=>d.server))];
+    if(!s.length)return;
+    h+=`<div><div class="oplbl"><span class="oppip" style="background:${oc[op]}"></span>${op}</div>`;
+    s.forEach(srv=>{
+      const dd=filtDrives.filter(d=>d.server===srv),mp=Math.max(...dd.map(d=>d.pct));
+      h+=`<div class="srow${activeServer===srv?' active':''}" onclick="openServer('${srv}')">
+        <span class="sname"><span class="sind ${sc(mp)}"></span>${srv}</span>
+        <span class="sstats"><span class="spct" style="color:${bc(mp)}">${mp}%</span><span class="sdrvs">${dd.length}d</span></span>
+      </div>`;
+    });
+    h+='</div>';
+  });
+  document.getElementById('sb-list').innerHTML=h||'<div style="padding:14px;font-size:11px;color:var(--dim)">No servers</div>';
+}
+
+function renderFleetMetrics(){
+  const r=filtDrives,tp=r.reduce((a,d)=>a+d.total_gb,0),tu=r.reduce((a,d)=>a+d.used_gb,0);
+  const pct=tp?Math.round(tu/tp*100):0,gro=r.reduce((a,d)=>a+(d.daily_growth||0),0);
+  const cri=r.filter(d=>d.status==='crit').length,war=r.filter(d=>d.status==='warn').length;
+  const minD=Math.min(...r.filter(d=>d.days_left<9999).map(d=>d.days_left).concat([9999]));
+  const dsz=r.filter(d=>d.downsize_candidate).length;
+  const wpR=r.filter(d=>d.outpost==='wp-outpost'),tvR=r.filter(d=>d.outpost==='tv-outpost');
+  const wP=wpR.length?Math.round(wpR.reduce((a,d)=>a+d.used_gb,0)/wpR.reduce((a,d)=>a+d.total_gb,0)*100):0;
+  const tP=tvR.length?Math.round(tvR.reduce((a,d)=>a+d.used_gb,0)/tvR.reduce((a,d)=>a+d.total_gb,0)*100):0;
+  document.getElementById('fleet-metrics').innerHTML=[
+    {l:'Provisioned',v:tp+' GB',s:r.length+' drives',c:'cc'},
+    {l:'Used',v:tu+' GB',s:pct+'% capacity',c:pct>=90?'cr':pct>=75?'ca':'cg'},
+    {l:'Fleet growth',v:gro.toFixed(1)+' GB/d',s:'all drives',c:'cc'},
+    {l:'Critical',v:cri,s:war+' warning',c:cri>0?'cr':'cg'},
+    {l:'Nearest full',v:minD<9999?minD+'d':'—',s:'days',c:minD<30?'cr':minD<60?'ca':'cg'},
+    {l:'Downsize',v:dsz,s:'candidates',c:dsz>0?'ca':'cg'},
+    {l:'wp-outpost',v:wP+'%',s:'avg used',c:'cw'},
+    {l:'tv-outpost',v:tP+'%',s:'avg used',c:'ct'},
+  ].map(m=>`<div class="mcard ${m.c}"><div class="mlbl">${m.l}</div><div class="mval">${m.v}</div><div class="msub">${m.s}</div></div>`).join('');
+}
+
+function renderTable(){
+  const srt=document.getElementById('srt-col').value;
+  let rows=[...filtDrives];
+  if(srt==='pct')rows.sort((a,b)=>b.pct-a.pct);
+  else if(srt==='growth')rows.sort((a,b)=>b.daily_growth-a.daily_growth);
+  else if(srt==='days')rows.sort((a,b)=>a.days_left-b.days_left);
+  else if(srt==='free')rows.sort((a,b)=>a.free_gb-b.free_gb);
+  else rows.sort((a,b)=>a.server.localeCompare(b.server));
+  function spark(d){
+    const h=gh(d).slice(-14);if(h.length<2)return'—';
+    const mn=Math.min(...h.map(p=>p.used_gb)),mx=Math.max(...h.map(p=>p.used_gb)),rng=mx-mn||1;
+    const pts=h.map((p,i)=>`${Math.round(i*(42/(h.length-1)))},${Math.round(16-((p.used_gb-mn)/rng)*14)}`).join(' ');
+    const col=h[h.length-1].used_gb>h[0].used_gb?'var(--red)':'var(--green)';
+    return`<svg width="44" height="18"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  }
+  document.getElementById('fleet-tbody').innerHTML=rows.length?rows.map(d=>`<tr>
+    <td><span class="slink" onclick="openServer('${d.server}')">${d.server}</span></td>
+    <td><span class="badge ${d.outpost==='wp-outpost'?'wp':'tv'}">${d.outpost==='wp-outpost'?'WP':'TV'}</span></td>
+    <td style="color:var(--soft)">${d.drive}</td>
+    <td style="font-size:10px;color:var(--dim)">${d.volume_id||'—'}</td>
+    <td>${d.total_gb} GB</td><td>${d.used_gb} GB</td>
+    <td style="color:${d.free_gb<20?'var(--red)':'var(--bright)'}">${d.free_gb} GB</td>
+    <td style="font-weight:600;color:${bc(d.pct)}">${d.pct}%</td>
+    <td><div class="ubar"><div class="ufill" style="width:${d.pct}%;background:${bc(d.pct)}"></div></div></td>
+    <td style="color:${d.daily_growth>5?'var(--amber)':'var(--bright)'}">${d.daily_growth>0?d.daily_growth.toFixed(1)+' GB/d':'~0'}</td>
+    <td style="color:${dc(d.days_left)}">${d.days_left<9999?d.days_left+'d':'—'}</td>
+    <td style="color:var(--dim);font-size:10px">${gh(d).length}</td>
+    <td><span class="badge ${d.status}">${sl(d.pct)}</span>${d.downsize_candidate?'<span class="badge dsz" style="margin-left:3px">DSZ</span>':''}</td>
+    <td><button class="dbtn" onclick="openServer('${d.server}')">Detail</button></td>
+  </tr>`).join('')
+  :'<tr><td colspan="14" style="text-align:center;color:var(--dim);padding:30px;font-size:10px;letter-spacing:.1em">NO DRIVES MATCH CURRENT FILTERS</td></tr>';
+}
+
+function renderDsz(){
+  const c=filtDrives.filter(d=>d.downsize_candidate);
+  if(!c.length){document.getElementById('dsz-list').innerHTML='<div style="color:var(--dim);font-size:11px;padding:6px;letter-spacing:.08em;text-transform:uppercase">No downsize candidates</div>';return;}
+  document.getElementById('dsz-list').innerHTML=c.map(d=>{
+    const h=gh(d),n=h.length,g=n>=2?h[n-1].used_gb-h[0].used_gb:0;
+    const w=d.total_gb-d.used_gb,sg=Math.ceil((d.used_gb*1.3)/10)*10;
+    return`<div class="dszcard">
+      <div class="dszhdr">
+        <span class="dszname">${d.server} / ${d.drive}</span>
+        <span class="badge ${d.outpost==='wp-outpost'?'wp':'tv'}">${d.outpost}</span>
+        <span class="badge dsz">Downsize</span>
+      </div>
+      <div class="dszgrid">
+        <div class="dszitem"><div class="dszilbl">Provisioned</div><div class="dszival">${d.total_gb} GB</div></div>
+        <div class="dszitem"><div class="dszilbl">Used today</div><div class="dszival">${d.used_gb} GB (${d.pct}%)</div></div>
+        <div class="dszitem"><div class="dszilbl">Wasted</div><div class="dszival" style="color:var(--amber)">${w} GB</div></div>
+        <div class="dszitem"><div class="dszilbl">Growth (${n}d)</div><div class="dszival">${g>=0?'+':''}${g} GB</div></div>
+        <div class="dszitem"><div class="dszilbl">Daily avg</div><div class="dszival">${d.daily_growth.toFixed(1)} GB/d</div></div>
+        <div class="dszitem"><div class="dszilbl">Suggested</div><div class="dszival" style="color:var(--green)">${sg} GB</div></div>
+      </div>
+      <div class="dszrec">Resize <strong>${d.total_gb} GB &#8594; ${sg} GB</strong> to reclaim ~${d.total_gb-sg} GB. Volume: <strong>${d.volume_id||'N/A'}</strong>. Confirm with server team. <a onclick="openServer('${d.server}')">View history &#8250;</a></div>
+    </div>`;
+  }).join('');
+}
+
+function renderDaysGrid(){
+  const r=filtDrives.filter(d=>d.days_left<9999).sort((a,b)=>a.days_left-b.days_left);
+  document.getElementById('days-grid').innerHTML=r.length?r.map(d=>`
+    <div class="dcard ${d.days_left<30?'dc':d.days_left<60?'dw':''}" onclick="openServer('${d.server}')">
+      <div class="dcsrv">${d.server}</div>
+      <div class="dcdrv">${d.drive} &bull; <span style="color:${d.outpost==='wp-outpost'?'var(--wp)':'var(--tv)'}">${d.outpost}</span></div>
+      <div class="dcnum ${dn(d.days_left)}">${d.days_left}</div>
+      <div class="dcunit">days left</div>
+      <div class="dcgr">${d.daily_growth.toFixed(1)} GB/d &bull; ${d.free_gb} GB free</div>
+    </div>`).join('')
+  :'<div style="color:var(--dim);font-size:10px;letter-spacing:.1em;text-transform:uppercase">No growth data in selected range</div>';
+}
+
+function showPanel(p){['inv','dsz','days'].forEach(id=>{document.getElementById('panel-'+id).classList.toggle('active',id===p);document.getElementById('tab-'+id).classList.toggle('active',id===p);});}
+function showFleet(){document.getElementById('fleet-view').style.display='block';document.getElementById('server-view').style.display='none';activeServer=null;activeDrive=null;renderSidebar();}
+
+function openServer(srv){
+  activeServer=srv;
+  const sd=filtDrives.filter(d=>d.server===srv);
+  if(!sd.length)return;
+  activeDrive=sd[0].drive;
+  document.getElementById('fleet-view').style.display='none';
+  document.getElementById('server-view').style.display='block';
+  document.getElementById('sv-name').textContent=srv;
+  document.getElementById('sv-op').textContent=sd[0].outpost;
+  const r0=sd[0];
+  document.getElementById('sv-meta').innerHTML=
+    `<span class="badge ${r0.outpost==='wp-outpost'?'wp':'tv'}">${r0.outpost}</span>
+     <span class="mtag">Last: ${_fsh(r0.last_seen)}</span>
+     <span class="mtag">${sd.length} drive${sd.length>1?'s':''}</span>
+     <span class="mtag">${gh(r0).length} data pts</span>`;
+  document.getElementById('drive-tabs').innerHTML=sd.map(d=>
+    `<button class="dtab${d.drive===activeDrive?' active':''}" onclick="selectDrive('${d.drive}',this)">
+      <span>${d.drive}</span>
+      <span class="dtab-pct" style="color:${bc(d.pct)}">${d.pct}%</span>
+      <span style="color:var(--dim);font-size:10px">${d.total_gb}GB</span>
+      ${d.downsize_candidate?'<span class="dtab-hint">DSZ</span>':''}
+    </button>`).join('');
+  renderSidebar();renderServerDrive();
+}
+
+function selectDrive(d,btn){activeDrive=d;document.querySelectorAll('.dtab').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderServerDrive();}
+
+function renderServerDrive(){
+  const row=filtDrives.find(d=>d.server===activeServer&&d.drive===activeDrive);
+  if(!row)return;
+  const h=gh(row);
+  document.getElementById('svdrvlbl').textContent=activeDrive+' — '+(row.volume_id||'N/A')+' — '+h.length+' pts in view';
+  const rb=document.getElementById('recbox');rb.style.display='block';
+  if(row.downsize_candidate){
+    const sg=Math.ceil((row.used_gb*1.3)/10)*10;
+    rb.className='recbox rd';
+    document.getElementById('rectitle').textContent='// DOWNSIZE CANDIDATE — FLAT USAGE';
+    document.getElementById('recbody').innerHTML=`Growth over ${h.length}d: <strong>${h.length>=2?h[h.length-1].used_gb-h[0].used_gb:0} GB</strong>. Using <strong>${row.used_gb}/${row.total_gb} GB (${row.pct}%)</strong>. Suggested: <strong>${row.total_gb} &#8594; ${sg} GB</strong> (~${row.total_gb-sg} GB saving).`;
+  }else if(row.pct>=90){rb.className='recbox rc';document.getElementById('rectitle').textContent='// CRITICAL — EXPAND IMMEDIATELY';document.getElementById('recbody').innerHTML=`At <strong>${row.pct}%</strong>, growing <strong>${row.daily_growth.toFixed(1)} GB/day</strong>. Full in ~<strong>${row.days_left} days</strong>. Expand via AWS Console → EBS → Modify Volume, then extend Windows partition.`;}
+  else if(row.pct>=75){rb.className='recbox rw';document.getElementById('rectitle').textContent='// WARNING — PLAN EXPANSION';document.getElementById('recbody').innerHTML=`At <strong>${row.pct}%</strong>. Full in ~<strong>${row.days_left} days</strong> at current growth.`;}
+  else{rb.className='recbox ro';document.getElementById('rectitle').textContent='// HEALTHY';document.getElementById('recbody').innerHTML=`<strong>${row.free_gb} GB free</strong> — growing <strong>${row.daily_growth.toFixed(1)} GB/day</strong>.`;}
+
+  const ta=h.length>=2?h[h.length-1].used_gb-h[0].used_gb:0;
+  document.getElementById('sv-metrics').innerHTML=[
+    {l:'Provisioned',v:row.total_gb+' GB',c:''},
+    {l:'Used',v:row.used_gb+' GB',c:row.pct>=90?'cr':row.pct>=75?'ca':''},
+    {l:'Free',v:row.free_gb+' GB',c:''},
+    {l:'% Used',v:row.pct+'%',c:row.pct>=90?'cr':row.pct>=75?'ca':'cg'},
+    {l:'Daily growth',v:row.daily_growth.toFixed(1)+' GB/d',c:''},
+    {l:'Total growth',v:(ta>=0?'+':'')+ta+' GB',s:'over '+h.length+'d',c:''},
+    {l:'Data points',v:h.length+'d',c:''},
+    {l:'Days to full',v:row.days_left<9999?row.days_left+'d':'—',c:row.days_left<30?'cr':row.days_left<60?'ca':''},
+  ].map(m=>`<div class="mcard ${m.c}"><div class="mlbl">${m.l}</div><div class="mval">${m.v}</div>${m.s?`<div class="msub">${m.s}</div>`:''}</div>`).join('');
+
+  renderServerCharts();renderMonthlyTable();renderHistoryTable();
+}
+
+function getFH(row){const h=gh(row),sv=document.getElementById('sv-range').value;return sv==='all'?h:h.slice(-parseInt(sv));}
+
+function renderServerCharts(){
+  const row=filtDrives.find(d=>d.server===activeServer&&d.drive===activeDrive);
+  if(!row)return;
+  const h=getFH(row);if(!h.length)return;
+  const lbs=h.map(p=>_fsh(p.date)),us=h.map(p=>p.used_gb),fs=h.map(p=>p.free_gb),ps=h.map(p=>p.total_gb);
+  const ds=h.map((p,i)=>i===0?0:Math.round((p.used_gb-h[i-1].used_gb)*10)/10);
+  if(svTrend)svTrend.destroy();
+  svTrend=new Chart(document.getElementById('sv-trend'),{type:'line',data:{labels:lbs,datasets:[
+    {data:us,borderColor:'#00d4ff',backgroundColor:'rgba(0,212,255,.06)',fill:true,tension:.3,pointRadius:h.length>60?0:2,borderWidth:1.5},
+    {data:fs,borderColor:'#00e676',backgroundColor:'rgba(0,230,118,.04)',fill:true,tension:.3,pointRadius:0,borderWidth:1},
+    {data:ps,borderColor:'#3d4f6e',borderDash:[5,4],pointRadius:0,fill:false,borderWidth:1},
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
+    y:{ticks:{color:'#5a7090',font:{size:10,family:'JetBrains Mono'},callback:v=>v+' GB'},grid:{color:'rgba(35,43,62,.8)'}},
+    x:{ticks:{color:'#5a7090',font:{size:10,family:'JetBrains Mono'},maxTicksLimit:12},grid:{display:false}}
+  }}});
+  if(svDelta)svDelta.destroy();
+  svDelta=new Chart(document.getElementById('sv-delta'),{type:'bar',data:{labels:lbs,datasets:[{data:ds,
+    backgroundColor:ds.map(v=>v>0?'rgba(255,61,61,.6)':v<-.5?'rgba(0,230,118,.6)':'rgba(61,79,110,.6)'),borderRadius:1}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
+      y:{ticks:{color:'#5a7090',font:{size:10,family:'JetBrains Mono'},callback:v=>v+' GB'},grid:{color:'rgba(35,43,62,.8)'}},
+      x:{ticks:{color:'#5a7090',font:{size:10,family:'JetBrains Mono'},maxTicksLimit:12},grid:{display:false}}
+    }}});
+}
+
+function renderMonthlyTable(){
+  const row=filtDrives.find(d=>d.server===activeServer&&d.drive===activeDrive);
+  const h=gh(row)||[],bm={};
+  h.forEach(p=>{const m=p.date.slice(0,7);if(!bm[m])bm[m]=[];bm[m].push(p);});
+  document.getElementById('monthly-tbody').innerHTML=Object.entries(bm).sort().map(([m,pts])=>{
+    const s=pts[0].used_gb,e=pts[pts.length-1].used_gb,g=e-s;
+    const avg=pts.length>1?Math.round((g/pts.length)*10)/10:0,ep=pts[pts.length-1].pct;
+    const[ass,col]=Math.abs(g)<3?['Flat','var(--dim)']:g>20?['Fast growth','var(--red)']:g>5?['Growing','var(--amber)']:['Stable','var(--green)'];
+    return`<tr><td>${_fmo(m+'-01')}</td><td>${s} GB</td><td>${e} GB</td>
+      <td class="${g>0?'cu':g<0?'cd':'cf'}">${g>=0?'+':''}${g} GB</td>
+      <td>${avg>=0?'+':''}${avg} GB/d</td>
+      <td style="color:${bc(ep)}">${ep}%</td>
+      <td style="color:${col}">${ass}</td></tr>`;
+  }).join('');
+}
+
+function renderHistoryTable(){
+  const row=filtDrives.find(d=>d.server===activeServer&&d.drive===activeDrive);
+  const rv=document.getElementById('hist-range').value,full=gh(row)||[];
+  const h=(rv==='all'?full:full.slice(-parseInt(rv))).slice().reverse();
+  document.getElementById('hist-tbody').innerHTML=h.map((p,i)=>{
+    const prev=h[i+1],delta=prev?p.used_gb-prev.used_gb:0;
+    const idx=full.length-1-i,s7=full.slice(Math.max(0,idx-6),idx+1);
+    const r7=s7.length>=2?Math.round(((s7[s7.length-1].used_gb-s7[0].used_gb)/(s7.length-1))*10)/10:0;
+    return`<tr><td>${p.date}</td><td>${p.used_gb} GB</td><td>${p.free_gb} GB</td>
+      <td style="color:${bc(p.pct)}">${p.pct}%</td>
+      <td class="${delta>0?'cu':delta<0?'cd':'cf'}">${delta>=0?'+':''}${delta} GB</td>
+      <td style="color:var(--soft)">${r7>=0?'+':''}${r7} GB/d</td>
+      <td>${p.total_gb} GB</td></tr>`;
+  }).join('');
+}
+
+function exportCSV(){
+  const row=filtDrives.find(d=>d.server===activeServer&&d.drive===activeDrive);
+  const h=gh(row)||[],hdr='date,server,outpost,drive,volume_id,total_gb,used_gb,free_gb,pct,delta_gb\n';
+  const body=h.map((p,i)=>{const prev=h[i-1],d=prev?p.used_gb-prev.used_gb:0;return[p.date,activeServer,row.outpost,activeDrive,row.volume_id||'',p.total_gb,p.used_gb,p.free_gb,p.pct,d].join(',');}).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([hdr+body],{type:'text/csv'}));
+  a.download=activeServer+'_'+activeDrive.replace(':','')+'_history.csv';a.click();
+}
+</script>
+</body>
+</html>
