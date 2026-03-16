@@ -44,7 +44,6 @@ CLUSTER     = os.environ.get("ECS_CLUSTER", "")
 TASK_DEF    = os.environ.get("AGGREGATOR_TASK_DEF", "")
 SUBNETS     = [s.strip() for s in os.environ.get("TASK_SUBNETS", "").split(",") if s.strip()]
 SEC_GROUPS  = [s.strip() for s in os.environ.get("TASK_SECURITY_GROUPS", "").split(",") if s.strip()]
-DEV_MODE    = os.environ.get("DEV_MODE", "false").lower() == "true"
 
 HTML_PATH   = Path(__file__).parent / "index.html"
 
@@ -54,11 +53,7 @@ HTML_PATH   = Path(__file__).parent / "index.html"
 def get_user(request: Request) -> dict:
     """
     ALB with Cognito injects x-amzn-oidc-data (base64url JWT payload).
-    DEV_MODE=true skips auth for local testing.
     """
-    if DEV_MODE:
-        return {"email": "dev@local", "groups": ["ebs-admins"], "is_admin": True}
-
     header = request.headers.get("x-amzn-oidc-data", "")
     if not header:
         raise HTTPException(status_code=401, detail="Not authenticated")

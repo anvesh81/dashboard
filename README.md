@@ -138,16 +138,16 @@ aws cognito-idp admin-add-user-to-group \
 ## Local development
 
 ```bash
-# Runs without ALB auth — uses DEV_MODE=true
+# Local app container; authenticated routes still expect the ALB-injected auth header
 docker build -t ebs-monitoring .
 docker run -p 8080:8080 \
   -e MONITORING_BUCKET=outposts-ebs-storage-monitoring \
-  -e DEV_MODE=true \
   -e AWS_DEFAULT_REGION=us-east-1 \
   -v ~/.aws:/root/.aws:ro \
   ebs-monitoring
 
 # Open http://localhost:8080
+# Note: /api/health remains usable, but dashboard/API routes require the auth header
 ```
 
 ## Update workflow (code change)

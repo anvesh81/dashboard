@@ -1,62 +1,50 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  EBS Outpost Disk Monitoring — Fargate on existing VPC.
-  Internal ALB + Cognito, ECS Fargate service, scheduled aggregator task,
-  ECR repo, CloudWatch logs. No VPC/subnet creation — uses your existing network.
+  EBS Outpost Disk Monitoring — Fargate, HTTPS + Cognito auth.
+  Use this template once you have an ACM certificate for your internal domain.
+  Replaces the HTTP-only template with full login, admin/readonly roles, session management.
 
 Parameters:
 
   MonitoringBucket:
     Type: String
     Default: outposts-ebs-storage-monitoring
-    Description: Existing S3 bucket where SSM documents write CSVs
 
   AdminEmail:
     Type: String
-    Description: First admin user — receives temporary password by email
     AllowedPattern: ".+@.+"
+    Description: First admin user — receives temporary password by email
 
   Environment:
     Type: String
     Default: prod
     AllowedValues: [prod, staging, dev]
 
-  # ── Your existing VPC ──────────────────────────────────────────────────────
-
   VpcId:
     Type: AWS::EC2::VPC::Id
-    Description: Your existing VPC ID
 
   PrivateSubnet1Id:
     Type: AWS::EC2::Subnet::Id
-    Description: Private subnet 1 — Fargate tasks run here (needs S3 VPC endpoint or NAT)
 
   PrivateSubnet2Id:
     Type: AWS::EC2::Subnet::Id
-    Description: Private subnet 2 — second AZ for ALB (can be same subnet as 1 if single-AZ Outpost)
 
   InternalCidr:
     Type: String
     Default: "10.0.0.0/8"
-    Description: CIDR allowed to reach the internal ALB (your corporate network range)
+    Description: Only this CIDR can reach the ALB
 
-  # ── Optional: ACM cert for HTTPS ──────────────────────────────────────────
+  DashboardDomain:
+    Type: String
+    Description: Your internal domain e.g. ebs-monitor.yourcompany.com
 
   AcmCertificateArn:
     Type: String
-    Default: ""
-    Description: >
-      ACM certificate ARN for HTTPS on the ALB.
-      Leave blank to use HTTP only (fine for internal-only access).
-
-  # ── Schedule ───────────────────────────────────────────────────────────────
+    Description: ACM certificate ARN for DashboardDomain
 
   AggregationSchedule:
     Type: String
-    Default: "cron(30 6 * * ? *)"
-    Description: EventBridge cron — default 06:30 UTC daily (30 min after SSM run)
-
-  # ── Container sizing ───────────────────────────────────────────────────────
+    Default: "cron(0 12 * * ? *)"
 
   ApiCpu:
     Type: Number
@@ -76,14 +64,23 @@ Parameters:
     Type: Number
     Default: 1024
 
+  ExistingEcrRepositoryUri:
+    Type: String
+    Description: Existing ECR repository URI, for example 123456789012.dkr.ecr.us-east-1.amazonaws.com/ebs-monitoring-prod
 
-Conditions:
-  HasCert: !Not [!Equals [!Ref AcmCertificateArn, ""]]
+  ExistingEcrRepositoryArn:
+    Type: String
+    Description: Existing ECR repository ARN used for automatic ECS redeploy on image push
+
+  DeployImageTag:
+    Type: String
+    Default: latest
+    Description: Image tag used by ECS tasks and watched for automatic redeploy
 
 
 Resources:
 
-  # ── Security groups ────────────────────────────────────────────────────────
+  # ── Security Groups ───────────────────────────────────────────────────────
 
   AlbSg:
     Type: AWS::EC2::SecurityGroup
@@ -118,22 +115,7 @@ Resources:
           Value: !Sub "ebs-monitoring-fargate-${Environment}"
 
 
-  # ── ECR Repository ─────────────────────────────────────────────────────────
-
-  ECRRepo:
-    Type: AWS::ECR::Repository
-    Properties:
-      RepositoryName: !Sub "ebs-monitoring-${Environment}"
-      ImageScanningConfiguration:
-        ScanOnPush: true
-      LifecyclePolicy:
-        LifecyclePolicyText: |
-          {"rules":[{"rulePriority":1,"description":"Keep last 5 images",
-          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},
-          "action":{"type":"expire"}}]}
-
-
-  # ── Cognito ────────────────────────────────────────────────────────────────
+  # ── Cognito ───────────────────────────────────────────────────────────────
 
   UserPool:
     Type: AWS::Cognito::UserPool
@@ -149,6 +131,13 @@ Resources:
           RequireNumbers: true
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true
+        InviteMessageTemplate:
+          EmailSubject: "Your EBS Monitoring dashboard access"
+          EmailMessage: |
+            Hi {username},
+            You have been given access to the EBS Outpost Disk Monitoring dashboard.
+            Your temporary password is: {####}
+            Sign in at: https://{DashboardDomain}
       MfaConfiguration: "OFF"
 
   AdminGroup:
@@ -163,17 +152,16 @@ Resources:
     Properties:
       GroupName: ebs-readonly
       UserPoolId: !Ref UserPool
-      Description: View-only access
+      Description: View only — cannot trigger refresh
 
   CognitoDomain:
     Type: AWS::Cognito::UserPoolDomain
     Properties:
-      Domain: !Sub "ebs-monitoring-${AWS::AccountId}-${Environment}"
+      Domain: !Sub "ebs-mon-${AWS::AccountId}"
       UserPoolId: !Ref UserPool
 
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
-    DependsOn: ALBListener
     Properties:
       ClientName: !Sub "ebs-alb-${Environment}"
       UserPoolId: !Ref UserPool
@@ -186,15 +174,9 @@ Resources:
       AllowedOAuthFlowsUserPoolClient: true
       SupportedIdentityProviders: [COGNITO]
       CallbackURLs:
-        - !If
-          - HasCert
-          - !Sub "https://${ALB.DNSName}/oauth2/idpresponse"
-          - !Sub "http://${ALB.DNSName}/oauth2/idpresponse"
+        - !Sub "https://${DashboardDomain}/oauth2/idpresponse"
       LogoutURLs:
-        - !If
-          - HasCert
-          - !Sub "https://${ALB.DNSName}/"
-          - !Sub "http://${ALB.DNSName}/"
+        - !Sub "https://${DashboardDomain}/"
       AccessTokenValidity: 8
       IdTokenValidity: 8
       RefreshTokenValidity: 30
@@ -224,7 +206,7 @@ Resources:
       Username: !Ref AdminEmail
 
 
-  # ── ALB (internal) ─────────────────────────────────────────────────────────
+  # ── ALB (internal, HTTPS + Cognito) ──────────────────────────────────────
 
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
@@ -235,10 +217,8 @@ Resources:
       Subnets:
         - !Ref PrivateSubnet1Id
         - !Ref PrivateSubnet2Id
-      SecurityGroups: [!Ref AlbSg]
-      Tags:
-        - Key: Name
-          Value: !Sub "ebs-monitoring-${Environment}"
+      SecurityGroups:
+        - !Ref AlbSg
 
   ALBTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -256,7 +236,6 @@ Resources:
         - Key: deregistration_delay.timeout_seconds
           Value: "30"
 
-  # HTTP listener — redirects to HTTPS if cert provided, else serves directly
   ALBHTTPListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -264,32 +243,14 @@ Resources:
       Protocol: HTTP
       Port: 80
       DefaultActions:
-        - !If
-          - HasCert
-          - Type: redirect
-            RedirectConfig:
-              Protocol: HTTPS
-              Port: "443"
-              StatusCode: HTTP_301
-          - Type: authenticate-cognito
-            Order: 1
-            AuthenticateCognitoConfig:
-              UserPoolArn: !GetAtt UserPool.Arn
-              UserPoolClientId: !Ref UserPoolClient
-              UserPoolDomain: !Sub "ebs-monitoring-${AWS::AccountId}-${Environment}"
-              OnUnauthenticatedRequest: authenticate
-              SessionTimeout: 28800
-        - !If
-          - HasCert
-          - !Ref AWS::NoValue
-          - Type: forward
-            Order: 2
-            TargetGroupArn: !Ref ALBTargetGroup
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: "443"
+            StatusCode: HTTP_301
 
-  # HTTPS listener (only created if cert ARN provided)
-  ALBListener:
+  ALBHTTPSListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
-    Condition: HasCert
     Properties:
       LoadBalancerArn: !Ref ALB
       Protocol: HTTPS
@@ -302,29 +263,7 @@ Resources:
           AuthenticateCognitoConfig:
             UserPoolArn: !GetAtt UserPool.Arn
             UserPoolClientId: !Ref UserPoolClient
-            UserPoolDomain: !Sub "ebs-monitoring-${AWS::AccountId}-${Environment}"
-            OnUnauthenticatedRequest: authenticate
-            SessionTimeout: 28800
-        - Type: forward
-          Order: 2
-          TargetGroupArn: !Ref ALBTargetGroup
-
-  # HTTP-only listener (used when no cert — needs separate resource due to ALBListener condition)
-  ALBListenerHTTPOnly:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    DependsOn: UserPoolClient
-    Condition: !Equals [!Ref AcmCertificateArn, ""]
-    Properties:
-      LoadBalancerArn: !Ref ALB
-      Protocol: HTTP
-      Port: 80
-      DefaultActions:
-        - Type: authenticate-cognito
-          Order: 1
-          AuthenticateCognitoConfig:
-            UserPoolArn: !GetAtt UserPool.Arn
-            UserPoolClientId: !Ref UserPoolClient
-            UserPoolDomain: !Sub "ebs-monitoring-${AWS::AccountId}-${Environment}"
+            UserPoolDomain: !Sub "ebs-mon-${AWS::AccountId}"
             OnUnauthenticatedRequest: authenticate
             SessionTimeout: 28800
         - Type: forward
@@ -332,7 +271,7 @@ Resources:
           TargetGroupArn: !Ref ALBTargetGroup
 
 
-  # ── ECS Cluster ────────────────────────────────────────────────────────────
+  # ── ECS ───────────────────────────────────────────────────────────────────
 
   ECSCluster:
     Type: AWS::ECS::Cluster
@@ -344,7 +283,7 @@ Resources:
           Value: enabled
 
 
-  # ── IAM ────────────────────────────────────────────────────────────────────
+  # ── IAM ───────────────────────────────────────────────────────────────────
 
   TaskExecRole:
     Type: AWS::IAM::Role
@@ -354,7 +293,8 @@ Resources:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal: {Service: ecs-tasks.amazonaws.com}
+            Principal:
+              Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
@@ -367,7 +307,8 @@ Resources:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal: {Service: ecs-tasks.amazonaws.com}
+            Principal:
+              Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       Policies:
         - PolicyName: ReadSummary
@@ -398,7 +339,8 @@ Resources:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal: {Service: ecs-tasks.amazonaws.com}
+            Principal:
+              Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       Policies:
         - PolicyName: S3ReadWrite
@@ -406,7 +348,10 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: [s3:GetObject, s3:ListBucket, s3:PutObject]
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:PutObject
                 Resource:
                   - !Sub "arn:aws:s3:::${MonitoringBucket}"
                   - !Sub "arn:aws:s3:::${MonitoringBucket}/*"
@@ -419,7 +364,8 @@ Resources:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal: {Service: events.amazonaws.com}
+            Principal:
+              Service: events.amazonaws.com
             Action: sts:AssumeRole
       Policies:
         - PolicyName: RunECSTask
@@ -435,8 +381,39 @@ Resources:
                   - !GetAtt TaskExecRole.Arn
                   - !GetAtt AggTaskRole.Arn
 
+  EcrDeployLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ebs-ecr-deploy-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: UpdateApiService
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                  - ecs:DescribeServices
+                Resource: !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/ebs-monitoring-${Environment}/ebs-api-${Environment}"
+              - Effect: Allow
+                Action: ecs:DescribeClusters
+                Resource: !GetAtt ECSCluster.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
 
-  # ── CloudWatch Log Groups ──────────────────────────────────────────────────
+
+  # ── CloudWatch Logs ───────────────────────────────────────────────────────
 
   ApiLogGroup:
     Type: AWS::Logs::LogGroup
@@ -450,8 +427,14 @@ Resources:
       LogGroupName: !Sub "/ecs/ebs-agg-${Environment}"
       RetentionInDays: 30
 
+  EcrDeployLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/ebs-ecr-deploy-${Environment}"
+      RetentionInDays: 30
 
-  # ── ECS Task Definitions ───────────────────────────────────────────────────
+
+  # ── Task Definitions ──────────────────────────────────────────────────────
 
   ApiTaskDef:
     Type: AWS::ECS::TaskDefinition
@@ -465,7 +448,7 @@ Resources:
       TaskRoleArn: !GetAtt ApiTaskRole.Arn
       ContainerDefinitions:
         - Name: api
-          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/ebs-monitoring-${Environment}:latest"
+          Image: !Sub "${ExistingEcrRepositoryUri}:${DeployImageTag}"
           PortMappings:
             - ContainerPort: 8080
           Environment:
@@ -488,7 +471,9 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: api
           HealthCheck:
-            Command: ["CMD-SHELL","curl -sf http://localhost:8080/api/health || exit 1"]
+            Command:
+              - CMD-SHELL
+              - curl -sf http://localhost:8080/api/health || exit 1
             Interval: 30
             Timeout: 5
             Retries: 3
@@ -505,8 +490,10 @@ Resources:
       TaskRoleArn: !GetAtt AggTaskRole.Arn
       ContainerDefinitions:
         - Name: aggregator
-          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/ebs-monitoring-${Environment}:latest"
-          Command: ["python", "aggregator.py"]
+          Image: !Sub "${ExistingEcrRepositoryUri}:${DeployImageTag}"
+          Command:
+            - python
+            - aggregator.py
           Environment:
             - Name: MONITORING_BUCKET
               Value: !Ref MonitoringBucket
@@ -519,14 +506,47 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: agg
 
+  EcrDeployFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "ebs-ecr-deploy-${Environment}"
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 30
+      Role: !GetAtt EcrDeployLambdaRole.Arn
+      Environment:
+        Variables:
+          ECS_CLUSTER: !Ref ECSCluster
+          ECS_SERVICE: !Sub "ebs-api-${Environment}"
+      Code:
+        ZipFile: |
+          import boto3
+          import os
 
-  # ── ECS Service ────────────────────────────────────────────────────────────
+          ecs = boto3.client("ecs")
+
+          def handler(event, context):
+              detail = event.get("detail", {})
+              if detail.get("action-type") != "PUSH" or detail.get("result") != "SUCCESS":
+                  return {"ignored": True, "event": detail}
+
+              response = ecs.update_service(
+                  cluster=os.environ["ECS_CLUSTER"],
+                  service=os.environ["ECS_SERVICE"],
+                  forceNewDeployment=True,
+              )
+              return {
+                  "updated": True,
+                  "service": response["service"]["serviceName"],
+                  "event": detail,
+              }
+
+
+  # ── ECS Service ───────────────────────────────────────────────────────────
 
   ApiService:
     Type: AWS::ECS::Service
-    DependsOn:
-      - ALBTargetGroup
-      - ApiTaskDef
+    DependsOn: ALBHTTPSListener
     Properties:
       ServiceName: !Sub "ebs-api-${Environment}"
       Cluster: !Ref ECSCluster
@@ -538,7 +558,8 @@ Resources:
           Subnets:
             - !Ref PrivateSubnet1Id
             - !Ref PrivateSubnet2Id
-          SecurityGroups: [!Ref FargateSg]
+          SecurityGroups:
+            - !Ref FargateSg
           AssignPublicIp: DISABLED
       LoadBalancers:
         - ContainerName: api
@@ -550,13 +571,13 @@ Resources:
       HealthCheckGracePeriodSeconds: 60
 
 
-  # ── EventBridge ────────────────────────────────────────────────────────────
+  # ── EventBridge ───────────────────────────────────────────────────────────
 
   AggScheduleRule:
     Type: AWS::Events::Rule
     Properties:
       Name: !Sub "ebs-aggregation-${Environment}"
-      Description: !Sub "Triggers EBS aggregator daily — ${AggregationSchedule}"
+      Description: Triggers EBS aggregator daily after SSM disk collection
       ScheduleExpression: !Ref AggregationSchedule
       State: ENABLED
       Targets:
@@ -568,28 +589,60 @@ Resources:
             TaskCount: 1
             LaunchType: FARGATE
             NetworkConfiguration:
-              AwsvpcConfiguration:
+              AwsVpcConfiguration:
                 Subnets:
                   - !Ref PrivateSubnet1Id
                   - !Ref PrivateSubnet2Id
-                SecurityGroups: [!Ref FargateSg]
+                SecurityGroups:
+                  - !Ref FargateSg
                 AssignPublicIp: DISABLED
           Input: '{"source":"eventbridge"}'
+
+  EcrPushRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "ebs-image-push-${Environment}"
+      Description: Force new ECS deployment when a new image is pushed to the configured ECR repository
+      EventPattern:
+        source:
+          - aws.ecr
+        detail-type:
+          - ECR Image Action
+        resources:
+          - !Ref ExistingEcrRepositoryArn
+        detail:
+          action-type:
+            - PUSH
+          image-tag:
+            - !Ref DeployImageTag
+          result:
+            - SUCCESS
+      Targets:
+        - Id: ApiRedeploy
+          Arn: !GetAtt EcrDeployFunction.Arn
+
+  EcrPushLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref EcrDeployFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EcrPushRule.Arn
 
 
 Outputs:
 
   DashboardURL:
-    Description: Internal ALB URL — accessible from your corporate network
-    Value: !Sub "http://${ALB.DNSName}"
+    Description: Dashboard URL — share with your team
+    Value: !Sub "https://${DashboardDomain}"
 
-  DashboardURLHTTPS:
-    Description: HTTPS URL (only if cert was provided)
-    Value: !If [HasCert, !Sub "https://${ALB.DNSName}", "No cert provided — using HTTP"]
+  ALBDnsName:
+    Description: ALB DNS — create a CNAME from DashboardDomain to this value
+    Value: !GetAtt ALB.DNSName
 
   ECRRepositoryURI:
-    Description: ECR repo URI — use in docker build/push
-    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/ebs-monitoring-${Environment}"
+    Description: Existing ECR repo URI for docker build and push
+    Value: !Ref ExistingEcrRepositoryUri
 
   ECSClusterName:
     Description: ECS cluster name
@@ -600,7 +653,7 @@ Outputs:
     Value: !Ref AggTaskDef
 
   FargateSecurityGroupId:
-    Description: Fargate security group — add to your SSM/Outpost SG allow-lists if needed
+    Description: Fargate security group ID
     Value: !Ref FargateSg
 
   CognitoUserPoolId:
@@ -608,9 +661,9 @@ Outputs:
     Value: !Ref UserPool
 
   CognitoLoginURL:
-    Description: Cognito hosted UI
-    Value: !Sub "https://ebs-monitoring-${AWS::AccountId}-${Environment}.auth.${AWS::Region}.amazoncognito.com/login"
+    Description: Cognito hosted UI login page
+    Value: !Sub "https://ebs-mon-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com/login"
 
   PrivateSubnets:
-    Description: Subnets used (for manual task runs)
+    Description: Private subnets used by Fargate tasks
     Value: !Sub "${PrivateSubnet1Id},${PrivateSubnet2Id}"
