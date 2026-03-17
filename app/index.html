@@ -347,8 +347,8 @@ body[data-theme='light'] .ctitle{color:var(--white);}
       <button class="mode-btn active" id="mode-dark" onclick="setTheme('dark')">Dark</button>
       <button class="mode-btn" id="mode-light" onclick="setTheme('light')">Light</button>
     </div>
+    <button class="hbtn" id="refresh-btn" onclick="triggerRefresh()">&#8635; Refresh</button>
     <span class="ts" id="ts-lbl"></span>
-    <button class="hbtn" id="refresh-btn" onclick="triggerRefresh()" style="display:none">&#8635; Refresh</button>
     <div class="profile-menu">
       <button class="profile-trigger" id="profile-trigger" onclick="toggleProfileMenu(event)">
         <span class="profile-avatar" id="profile-avatar">U</span>
@@ -358,7 +358,7 @@ body[data-theme='light'] .ctitle{color:var(--white);}
       <div class="profile-dropdown" id="profile-dropdown">
         <div class="profile-head">
           <div class="profile-email" id="profile-email">user@example.com</div>
-          <div class="profile-role" id="profile-role">Read-only</div>
+          <div class="profile-role" id="profile-role">Authenticated user</div>
         </div>
         <button class="profile-item" onclick="signOut()">Sign out</button>
       </div>
@@ -561,7 +561,7 @@ body[data-theme='light'] .ctitle{color:var(--white);}
 <script>
 const CONFIG={API_BASE:'',COGNITO_REGION:'ALB_HANDLES_AUTH',USER_POOL_ID:'ALB_HANDLES_AUTH',CLIENT_ID:'ALB_HANDLES_AUTH'};
 let summary=null,allDrives=[],filtDrives=[],filterFrom=null,filterTo=null;
-let activeServer=null,activeDrive=null,isAdmin=false,svTrend,svDelta;
+let activeServer=null,activeDrive=null,svTrend,svDelta;
 let currentRangeLabel='—';
 let accounts=[];
 
@@ -601,14 +601,12 @@ async function loadData(){
     hydrateDrives();
     populateAccountFilter();
     const user=summary._user||{};
-    isAdmin=user.is_admin||false;
     const email=user.email||'user@local';
     const initial=(email.split('@')[0]||'u').slice(0,2).toUpperCase();
     document.getElementById('profile-name').textContent=email;
     document.getElementById('profile-email').textContent=email;
-    document.getElementById('profile-role').textContent=isAdmin?'Admin':'Read-only';
+    document.getElementById('profile-role').textContent='Authenticated user';
     document.getElementById('profile-avatar').textContent=initial;
-    if(isAdmin)document.getElementById('refresh-btn').style.display='inline-block';
     document.getElementById('ts-lbl').textContent='Updated '+new Date(summary.generated_utc).toLocaleTimeString();
     if(summary.data_from)document.getElementById('date-from').value=summary.data_from;
     if(summary.data_to)document.getElementById('date-to').value=summary.data_to;
@@ -652,7 +650,6 @@ function applyPresetFilter(){
 }
 
 async function triggerRefresh(){
-  if(!isAdmin)return;
   const b=document.getElementById('refresh-btn');
   b.disabled=true;b.textContent='Starting…';
   try{const r=await apiPost('/api/refresh');showInfo(r.message||'Aggregator started');setTimeout(loadData,120000);}

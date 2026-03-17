@@ -40,7 +40,7 @@ Internal ALB (Cognito auth)
   └── ECS Fargate service — main.py (FastAPI)
        GET /           → index.html (dashboard)
        GET /api/*      → disk metrics JSON
-       POST /api/refresh → re-triggers aggregator (admin only)
+       POST /api/refresh → re-triggers aggregator
 ```
 
 ## Quick start
@@ -51,7 +51,7 @@ Open `cfn/main-stack.yaml` and note the parameters section.
 You will need:
 - `VpcId`           — your existing VPC ID
 - `PrivateSubnet1Id` and `PrivateSubnet2Id` — private subnets (need S3 access via VPC endpoint or NAT)
-- `AdminEmail`      — first admin user (receives temp password)
+- `AdminEmail`      — first dashboard user (receives temp password)
 - `InternalCidr`    — CIDR range allowed to reach the ALB (e.g. 10.0.0.0/8)
 - `AcmCertificateArn` — optional, leave blank for HTTP-only
 
@@ -112,7 +112,7 @@ aws ecs run-task \
 ### Step 6 — Open dashboard
 
 Go to the `DashboardURL` from CloudFormation outputs.
-Sign in with your `AdminEmail` + temp password from the Cognito invite email.
+Sign in with your invited email + temp password from the Cognito invite email.
 
 ## Adding team members
 
@@ -122,17 +122,11 @@ POOL=$(aws cloudformation describe-stacks \
   --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolId'].OutputValue" \
   --output text)
 
-# Read-only user
 aws cognito-idp admin-create-user \
   --user-pool-id $POOL \
   --username teammate@company.com \
   --user-attributes Name=email,Value=teammate@company.com Name=email_verified,Value=true \
   --desired-delivery-mediums EMAIL
-
-aws cognito-idp admin-add-user-to-group \
-  --user-pool-id $POOL \
-  --username teammate@company.com \
-  --group-name ebs-readonly   # or ebs-admins
 ```
 
 ## Local development

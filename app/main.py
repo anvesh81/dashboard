@@ -12,7 +12,7 @@ GET  /api/summary                → full fleet + drives (history stripped)
 GET  /api/drives                 → drive list  ?outpost=  ?status=
 GET  /api/drives/{server}/{drive}→ single drive with full history
 GET  /api/downsize               → downsize candidates
-POST /api/refresh                → trigger aggregator ECS task (admin only)
+POST /api/refresh                → trigger aggregator ECS task
 """
 
 import base64
@@ -68,15 +68,10 @@ def get_user(request: Request) -> dict:
         return {
             "email":    payload.get("email", payload.get("sub", "unknown")),
             "groups":   groups,
-            "is_admin": "ebs-admins" in groups,
+            "is_admin": True,
         }
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Auth header parse error: {e}")
-
-
-def require_admin(user: dict):
-    if not user["is_admin"]:
-        raise HTTPException(status_code=403, detail="ebs-admins group required")
 
 
 # ── S3 ─────────────────────────────────────────────────────────────────────────
@@ -188,7 +183,6 @@ def get_downsize(request: Request):
 @app.post("/api/refresh")
 def trigger_refresh(request: Request):
     user = get_user(request)
-    require_admin(user)
 
     if not CLUSTER or not TASK_DEF:
         raise HTTPException(

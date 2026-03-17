@@ -1,11 +1,14 @@
 FROM python:3.12-slim
 
-# Pull latest OS security patches including sqlite3 fix
-RUN apt-get update && apt-get upgrade -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Install curl for ECS container health checks
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN pip install --upgrade pip==25.3 && \
+RUN pip install --upgrade pip && \
     pip install --no-cache-dir \
     fastapi==0.111.0 \
     uvicorn[standard]==0.30.1 \

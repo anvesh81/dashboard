@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   EBS Outpost Disk Monitoring — Fargate, HTTPS + Cognito auth.
   Use this template once you have an ACM certificate for your internal domain.
-  Replaces the HTTP-only template with full login, admin/readonly roles, session management.
+  Replaces the HTTP-only template with full login and session management.
 
 Parameters:
 
@@ -13,7 +13,7 @@ Parameters:
   AdminEmail:
     Type: String
     AllowedPattern: ".+@.+"
-    Description: First admin user — receives temporary password by email
+    Description: First dashboard user — receives temporary password by email
 
   Environment:
     Type: String
@@ -140,20 +140,6 @@ Resources:
             Sign in at: https://{DashboardDomain}
       MfaConfiguration: "OFF"
 
-  AdminGroup:
-    Type: AWS::Cognito::UserPoolGroup
-    Properties:
-      GroupName: ebs-admins
-      UserPoolId: !Ref UserPool
-      Description: Full access — can trigger manual aggregation refresh
-
-  ReadOnlyGroup:
-    Type: AWS::Cognito::UserPoolGroup
-    Properties:
-      GroupName: ebs-readonly
-      UserPoolId: !Ref UserPool
-      Description: View only — cannot trigger refresh
-
   CognitoDomain:
     Type: AWS::Cognito::UserPoolDomain
     Properties:
@@ -196,15 +182,6 @@ Resources:
           Value: !Ref AdminEmail
         - Name: email_verified
           Value: "true"
-
-  AdminUserGroupAttach:
-    Type: AWS::Cognito::UserPoolUserToGroupAttachment
-    DependsOn: AdminUser
-    Properties:
-      UserPoolId: !Ref UserPool
-      GroupName: !Ref AdminGroup
-      Username: !Ref AdminEmail
-
 
   # ── ALB (internal, HTTPS + Cognito) ──────────────────────────────────────
 
