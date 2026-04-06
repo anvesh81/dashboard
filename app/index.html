@@ -308,6 +308,13 @@ body[data-theme='light'] .ctitle{color:var(--white);}
 
 /* PANEL */
 .panel{display:none;} .panel.active{display:block;}
+.anl-charts{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;}
+.anl-chart-wrap{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px;}
+.anl-chart-title{font-family:var(--display);font-size:13px;font-weight:600;color:var(--white);margin-bottom:3px;}
+.anl-chart-sub{font-size:10px;color:var(--dim);letter-spacing:.06em;margin-bottom:14px;}
+.anl-legend{display:flex;align-items:center;gap:4px;margin-top:10px;font-size:10px;color:var(--dim);}
+.anl-leg-dot{display:inline-block;width:8px;height:8px;border-radius:50%;}
+@media(max-width:768px){.anl-charts{grid-template-columns:1fr;}}
 
 /* LOADING */
 .loading{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:96px;gap:14px;}
@@ -443,6 +450,7 @@ body[data-theme='light'] .ctitle{color:var(--white);}
         <button class="stab active" id="tab-inv"  onclick="showPanel('inv')">Inventory</button>
         <button class="stab"        id="tab-dsz"  onclick="showPanel('dsz')">Downsize candidates</button>
         <button class="stab"        id="tab-days" onclick="showPanel('days')">Days until full</button>
+        <button class="stab"        id="tab-anl"  onclick="showPanel('anl')">Analytics</button>
       </div>
 
       <div class="panel active" id="panel-inv">
@@ -479,6 +487,43 @@ body[data-theme='light'] .ctitle{color:var(--white);}
 
       <div class="panel" id="panel-dsz"><div id="dsz-list"></div></div>
       <div class="panel" id="panel-days"><div class="dgrid" id="days-grid"></div></div>
+
+      <div class="panel" id="panel-anl">
+        <div class="mgrid" id="anl-stats"></div>
+        <div class="anl-charts">
+          <div class="anl-chart-wrap">
+            <div class="anl-chart-title">Fleet Capacity Trend</div>
+            <div class="anl-chart-sub">Used vs Free GB — filtered drives &amp; date range</div>
+            <div style="position:relative;height:220px"><canvas id="anl-trend"></canvas></div>
+            <div class="anl-legend">
+              <span class="anl-leg-dot" style="background:#00d4ff"></span>Used
+              <span class="anl-leg-dot" style="background:#00e676;margin-left:12px"></span>Free
+              <span class="anl-leg-dot" style="background:#3d4f6e;margin-left:12px"></span>Provisioned
+            </div>
+          </div>
+          <div class="anl-chart-wrap">
+            <div class="anl-chart-title">Daily Growth Rate</div>
+            <div class="anl-chart-sub">Net GB added per day across filtered fleet</div>
+            <div style="position:relative;height:220px"><canvas id="anl-delta"></canvas></div>
+            <div class="anl-legend">
+              <span class="anl-leg-dot" style="background:rgba(220,38,38,.75)"></span>Growth
+              <span class="anl-leg-dot" style="background:rgba(22,163,74,.75);margin-left:12px"></span>Shrink
+            </div>
+          </div>
+        </div>
+        <div class="anl-charts" style="margin-top:0">
+          <div class="anl-chart-wrap">
+            <div class="anl-chart-title">Outpost Comparison</div>
+            <div class="anl-chart-sub">Used GB per outpost over time</div>
+            <div style="position:relative;height:200px"><canvas id="anl-outpost"></canvas></div>
+          </div>
+          <div class="anl-chart-wrap">
+            <div class="anl-chart-title">Usage Distribution</div>
+            <div class="anl-chart-sub">Drive health status breakdown</div>
+            <div style="position:relative;height:200px"><canvas id="anl-dist"></canvas></div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- SERVER DETAIL -->
@@ -596,7 +641,7 @@ async function loadData(){
   document.getElementById('fleet-view').style.display='none';
   document.getElementById('server-view').style.display='none';
   try{
-    summary=await apiGet('/api/summary');
+    summary=await apiGet('/api/summary?include_history=true');
     allDrives=summary.drives||[];
     hydrateDrives();
     populateAccountFilter();
@@ -715,7 +760,7 @@ function showAlert(m){
 }
 function showInfo(m){const b=document.getElementById('ibanner');b.textContent=m;b.classList.add('show');setTimeout(()=>b.classList.remove('show'),8000);}
 
-function renderAll(){renderAlerts();renderSidebar();renderFleetHero();renderFleetMetrics();renderTable();renderDsz();renderDaysGrid();if(activeServer)renderServerDrive();else showFleet();}
+function renderAll(){renderAlerts();renderSidebar();renderFleetHero();renderFleetMetrics();renderTable();renderDsz();renderDaysGrid();if(document.getElementById('panel-anl').classList.contains('active'))renderAnalytics();if(activeServer)renderServerDrive();else showFleet();}
 
 function renderAlerts(){
   const c=filtDrives.filter(d=>d.status==='crit');
@@ -885,7 +930,7 @@ function renderDaysGrid(){
   :'<div style="color:var(--dim);font-size:10px;letter-spacing:.1em;text-transform:uppercase">No growth data in selected range</div>';
 }
 
-function showPanel(p){['inv','dsz','days'].forEach(id=>{document.getElementById('panel-'+id).classList.toggle('active',id===p);document.getElementById('tab-'+id).classList.toggle('active',id===p);});}
+function showPanel(p){['inv','dsz','days','anl'].forEach(id=>{document.getElementById('panel-'+id).classList.toggle('active',id===p);document.getElementById('tab-'+id).classList.toggle('active',id===p);});if(p==='anl')renderAnalytics();}
 function showFleet(){document.getElementById('fleet-view').style.display='block';document.getElementById('server-view').style.display='none';activeServer=null;activeDrive=null;renderSidebar();}
 
 function openServer(srv){
@@ -1053,6 +1098,130 @@ function exportFleetCSV(){
 async function copyValue(v){
   try{await navigator.clipboard.writeText(v);showInfo('Copied: '+v);}
   catch(e){showAlert('Copy failed');}
+}
+
+let anlTrend=null,anlDelta=null,anlOutpost=null,anlDist=null;
+
+function renderAnalytics(){
+  // Build daily fleet aggregates from filtDrives history (already date-filtered)
+  const daily={};
+  const byOp={};
+  filtDrives.forEach(d=>{
+    const op=d.outpost||'unknown';
+    const h=gh(d);
+    h.forEach(snap=>{
+      const dt=snap.date;
+      if(!daily[dt])daily[dt]={date:dt,used_gb:0,free_gb:0,total_gb:0,drives:0};
+      daily[dt].used_gb +=snap.used_gb ||0;
+      daily[dt].free_gb +=snap.free_gb ||0;
+      daily[dt].total_gb+=snap.total_gb||0;
+      daily[dt].drives++;
+      if(!byOp[op])byOp[op]={};
+      if(!byOp[op][dt])byOp[op][dt]={date:dt,used_gb:0};
+      byOp[op][dt].used_gb+=snap.used_gb||0;
+    });
+  });
+
+  const timeline=Object.values(daily).sort((a,b)=>a.date.localeCompare(b.date));
+
+  const noData='<div style="color:var(--dim);font-size:11px;padding:12px;letter-spacing:.06em">No history data in selected range — switch to "All available" or a wider range.</div>';
+  if(!timeline.length){
+    document.getElementById('anl-stats').innerHTML=noData;
+    return;
+  }
+
+  // Key metric cards
+  const first=timeline[0],last=timeline[timeline.length-1];
+  const totalGrowth=last.used_gb-first.used_gb;
+  const days=timeline.length;
+  const avgDaily=days>1?((totalGrowth/(days-1)).toFixed(1)):'—';
+  const peakPct=Math.round(Math.max(...timeline.map(t=>t.total_gb>0?t.used_gb/t.total_gb*100:0)));
+  const lastPct=last.total_gb>0?Math.round(last.used_gb/last.total_gb*100):0;
+  const critDrives=filtDrives.filter(d=>d.status==='crit').length;
+  const warnDrives=filtDrives.filter(d=>d.status==='warn').length;
+
+  document.getElementById('anl-stats').innerHTML=[
+    {l:'Period',v:days+'d',s:_fmt(first.date)+' → '+_fmt(last.date),c:'cc'},
+    {l:'Net growth',v:(totalGrowth>=0?'+':'')+totalGrowth+' GB',s:'over period',c:totalGrowth>100?'ca':'cc'},
+    {l:'Avg daily',v:(avgDaily>0?'+':'')+avgDaily+' GB/d',s:'fleet growth rate',c:'cc'},
+    {l:'Peak usage',v:peakPct+'%',s:'fleet utilization high',c:peakPct>=90?'cr':peakPct>=75?'ca':'cg'},
+    {l:'Now at',v:lastPct+'%',s:last.used_gb+' / '+last.total_gb+' GB',c:lastPct>=90?'cr':lastPct>=75?'ca':'cg'},
+    {l:'Critical',v:critDrives,s:warnDrives+' warning',c:critDrives>0?'cr':'cg'},
+  ].map(m=>`<div class="mcard ${m.c}"><div class="mlbl">${m.l}</div><div class="mval">${m.v}</div><div class="msub">${m.s}</div></div>`).join('');
+
+  // Sample for chart readability
+  const step=Math.max(1,Math.floor(timeline.length/120));
+  const pts=timeline.filter((_,i)=>i%step===0||i===timeline.length-1);
+  const lbs=pts.map(p=>_fsh(p.date));
+  const used=pts.map(p=>p.used_gb);
+  const free=pts.map(p=>p.free_gb);
+  const total=pts.map(p=>p.total_gb);
+  const deltas=pts.map((p,i)=>i===0?0:Math.round((p.used_gb-pts[i-1].used_gb)*10)/10);
+  const axC='#5f7791',gdC='rgba(41,70,97,.12)';
+  const monoFont='JetBrains Mono';
+
+  // Capacity trend chart
+  if(anlTrend)anlTrend.destroy();
+  anlTrend=new Chart(document.getElementById('anl-trend'),{
+    type:'line',
+    data:{labels:lbs,datasets:[
+      {label:'Used',data:used,borderColor:'#00d4ff',backgroundColor:'rgba(0,212,255,.06)',fill:true,tension:.3,pointRadius:pts.length>60?0:2,borderWidth:1.5},
+      {label:'Free',data:free,borderColor:'#00e676',backgroundColor:'rgba(0,230,118,.04)',fill:true,tension:.3,pointRadius:0,borderWidth:1},
+      {label:'Provisioned',data:total,borderColor:'#3d4f6e',borderDash:[5,4],pointRadius:0,fill:false,borderWidth:1},
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        y:{ticks:{color:axC,font:{size:10,family:monoFont},callback:v=>v+' GB'},grid:{color:gdC}},
+        x:{ticks:{color:axC,font:{size:10,family:monoFont},maxTicksLimit:10},grid:{display:false}}
+      }}
+  });
+
+  // Daily delta chart
+  if(anlDelta)anlDelta.destroy();
+  anlDelta=new Chart(document.getElementById('anl-delta'),{
+    type:'bar',
+    data:{labels:lbs,datasets:[{data:deltas,
+      backgroundColor:deltas.map(v=>v>0?'rgba(220,38,38,.55)':v<-.5?'rgba(22,163,74,.55)':'rgba(111,134,160,.35)'),
+      borderRadius:1}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        y:{ticks:{color:axC,font:{size:10,family:monoFont},callback:v=>v+' GB'},grid:{color:gdC}},
+        x:{ticks:{color:axC,font:{size:10,family:monoFont},maxTicksLimit:10},grid:{display:false}}
+      }}
+  });
+
+  // Per-outpost trend
+  const ops=Object.keys(byOp).sort();
+  const opColors={'wp-outpost':'rgba(129,144,255,.8)','tv-outpost':'rgba(57,215,192,.8)'};
+  const opDatasets=ops.map(op=>{
+    const opPts=pts.map(p=>byOp[op]&&byOp[op][p.date]?byOp[op][p.date].used_gb:null);
+    return{label:op,data:opPts,borderColor:opColors[op]||'#96aec7',backgroundColor:(opColors[op]||'#96aec7').replace('.8','.08'),fill:true,tension:.3,pointRadius:0,borderWidth:1.5,spanGaps:true};
+  });
+  if(anlOutpost)anlOutpost.destroy();
+  anlOutpost=new Chart(document.getElementById('anl-outpost'),{
+    type:'line',data:{labels:lbs,datasets:opDatasets},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:true,labels:{color:'#96aec7',font:{size:10,family:monoFont},boxWidth:10,padding:10}}},
+      scales:{
+        y:{ticks:{color:axC,font:{size:10,family:monoFont},callback:v=>v+' GB'},grid:{color:gdC}},
+        x:{ticks:{color:axC,font:{size:10,family:monoFont},maxTicksLimit:10},grid:{display:false}}
+      }}
+  });
+
+  // Status distribution doughnut
+  const ok=filtDrives.filter(d=>d.status==='ok').length;
+  const warn=filtDrives.filter(d=>d.status==='warn').length;
+  const crit=filtDrives.filter(d=>d.status==='crit').length;
+  if(anlDist)anlDist.destroy();
+  anlDist=new Chart(document.getElementById('anl-dist'),{
+    type:'doughnut',
+    data:{labels:['Healthy','Warning','Critical'],
+      datasets:[{data:[ok,warn,crit],backgroundColor:['rgba(68,223,149,.75)','rgba(255,183,66,.75)','rgba(255,106,106,.75)'],borderWidth:0,hoverOffset:4}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:'65%',
+      plugins:{legend:{display:true,position:'right',labels:{color:'#96aec7',font:{size:10,family:monoFont},boxWidth:10,padding:12}}}}
+  });
 }
 </script>
 </body>

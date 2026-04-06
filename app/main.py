@@ -116,15 +116,67 @@ def me(request: Request):
 
 
 @app.get("/api/summary")
-def get_summary(request: Request):
+def get_summary(request: Request, include_history: bool = False):
     user    = get_user(request)
     summary = load_summary()
+    drives  = summary.get("drives", [])
     lean    = {
         **summary,
-        "drives": [strip_history(d) for d in summary.get("drives", [])],
+        "drives": drives if include_history else [strip_history(d) for d in drives],
         "_user":  {"email": user["email"], "is_admin": user["is_admin"]},
     }
     return JSONResponse(content=lean)
+
+
+@app.get("/api/analytics")
+def get_analytics(
+    request: Request,
+    from_date: str = None,
+    to_date: str   = None,
+    outpost: str   = None,
+):
+    get_user(request)
+    summary = load_summary()
+    drives  = summary.get("drives", [])
+    if outpost:
+        drives = [d for d in drives if d.get("outpost") == outpost]
+
+    daily: dict = {}
+    for d in drives:
+        for snap in d.get("history", []):
+            date = snap.get("date", "")
+            if not date:
+                continue
+            if from_date and date < from_date:
+                continue
+            if to_date and date > to_date:
+                continue
+            if date not in daily:
+                daily[date] = {
+                    "date":     date,
+                    "used_gb":  0,
+                    "free_gb":  0,
+                    "total_gb": 0,
+                    "drives":   0,
+                }
+            daily[date]["used_gb"]  += snap.get("used_gb",  0)
+            daily[date]["free_gb"]  += snap.get("free_gb",  0)
+            daily[date]["total_gb"] += snap.get("total_gb", 0)
+            daily[date]["drives"]   += 1
+
+    timeline = sorted(daily.values(), key=lambda x: x["date"])
+    for i, day in enumerate(timeline):
+        prev = timeline[i - 1] if i > 0 else None
+        day["delta_gb"] = round(day["used_gb"] - prev["used_gb"], 1) if prev else 0
+
+    return JSONResponse(content={
+        "from_date":    from_date or summary.get("data_from"),
+        "to_date":      to_date   or summary.get("data_to"),
+        "timeline":     timeline,
+        "drives_count": len(drives),
+        "data_from":    summary.get("data_from"),
+        "data_to":      summary.get("data_to"),
+    })
 
 
 @app.get("/api/drives")
